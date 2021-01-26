@@ -219,12 +219,42 @@ to enforce that a type conforming to `P` provides an effectful read-only propert
 
 The interpretation of an effectful property definition is straightforward: the `code-block` appearing in such a `get`-ter definition will be allowed to exhibit the effects specified, i.e., throwing and/or suspending such that `await` and `try` expressions are allowed in that `code-block`. Furthermore, expressions that evaluate to an access of the property will be treated as having the effects that are declared on that property. One can think of such expressions as a simple desugaring to a method call on the object. It is always possible to determine whether a property has such effects, because the declaration of the property is always known statically. Thus, it is a static error to omit the appropriate `await`, `try`, *etc*.
 
-<!--
+
 #### Protocol conformance
 
-TODO: works the same as async and/or throwing functions.
+In order for a type to conform to a protocol containing effectful properties, the type must contain a property that exhibits *the same or fewer effects than the protocol specifies*. This rule mirrors how conformance checking happens for functions with effects. Here is a well-typed example without any superfluous `await`s or `try`s that follows this rule:
+
+```swift
+protocol P {
+  associatedtype T
+  var someProp : T { get async throws }
+}
+
+class NoEffects : P { var someProp : Int { get { 1 } } }
+
+class JustAsync : P { var someProp : Int { get async { 2 } } }
+
+class JustThrows : P { var someProp : Int { get throws { 3 } } }
+
+class Everything : P { var someProp : Int { get async throws { 4 } } }
+
+func exampleExpressions() async throws {
+  let _ = NoEffects().someProp
+  let _ = await JustAsync().someProp
+  let _ = try! JustThrows().someProp
+  let _ = try! await Everything().someProp
+
+  let _ = try! await (NoEffects() as P).someProp
+  let _ = try! await (JustAsync() as P).someProp
+  let _ = try! await (JustThrows() as P).someProp
+  let _ = try! await (Everything() as P).someProp
+}
+```
+
+Formally speaking, let us consider a getter `G` to have a set of effects `effects(G)` associated with it. This proposal adds one additional rule to conformance checking: if a getter definition `D` is said to satisfy the requirements of a protocol's getter declaration `DP`, then `effects(D)` is a subset of `effects(DP)`.
 
 
+<!--
 #### Property Inheritance
 
 TODO: works the same as before, I think.

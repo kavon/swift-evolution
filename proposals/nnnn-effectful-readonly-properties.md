@@ -365,6 +365,16 @@ There is precedent for automatically synthesizing Swift interfaces to ObjC types
 
 Thus, it seems that providing a one-sided ObjC bridging capability, without also bridging effectful setters, would not be ideal and has been excluded from this proposal. But, it is believed that even without ObjC bridging, adding effectful, read-only properties to Swift through this proposal would still be an overall benefit with a high power-to-weight ratio.
 
+#### KeyPaths
+
+A [key-path expression](https://docs.swift.org/swift-book/ReferenceManual/Expressions.html) is syntactic sugar for instances of the `KeyPath` class and its type-erased siblings.  The introduction of effectful properties would require changes to the synthesis of `subscript(keyPath:)` for each type. It would also probably require restrictions on type-erasure for key-paths that can access effectul properties.
+
+For example, because we do not allow for function overloading based only on differences in effects, some sort of mechanism like `rethrows` and an equivalent version for `async` (such as a "reasync") would be required on `subscript(keyPath:)` as a starting-point.  While a key-path literal can be [automatically treated as a function](0249-key-path-literal-function-expressions.md), a general `KeyPath` value is not a function, so it cannot carry effects in its type. This causes problems when trying to make, for example, a `rethrows` version of `subscript(keyPath:)` work.
+
+We could also introduce additional kinds of key-paths that have various capabilities, like the existing `WritableKeyPath` and `ReferenceWritableKeyPath`. Then, we could synthesize versions of `subscript` with the right effects specifiers on it, for example, `subscript<T : ThrowingKeyPath>(keyPath : T) throws`. This would require `KeyPath` kinds for all three new combinations of effects beyond "no effects".
+
+So, a non-trivial restructuring of the type system, or significant extensions to the `KeyPath` API, would be required to make key-paths work for effectul properties. Thus, for now, we will disallow accesses to effectful properties via key-paths.  There already exist restrictions on key-paths to mutable properties based on the instance type (e.g., `WritableKeyPath`), so it would not be unusual to disallow key-paths to effectful properties.
+
 ## Alternatives considered
 
 <!-- Describe alternative approaches to addressing the same problem, and

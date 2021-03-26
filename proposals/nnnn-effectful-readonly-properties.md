@@ -299,6 +299,68 @@ but, if `prop` were a method instead (whether that method were `async` or not), 
 
 Given the syntax and semantics for effectful read-only properties discussed earlier, `await act.prop` is a well-defined expression that is a possible suspension point.  Thus, this proposal provides the ability to access *any* read-only computed property belonging to an actor, from _outside_ of that actor, as a natural extension of its design.
 
+#### Objective-C bridging
+
+Some API designers may want to take advantage of effectful properties by
+having an Objective-C getter method be imported as a property. Because 
+Objective-C methods are normally imported as Swift methods, their import as
+an effectful Swift property will be controlled through annotations.
+
+##### Methods with Completion Handlers
+An Objective-C method that meets the following requirements:
+  1. The name begins with `get`.
+  2. There is no method with the same name, if one were to replace `get` with `set`, in the class or protocol.
+  3. The method takes exactly one argument, a completion handler, as recognized by 
+  [SE-0297](https://github.com/apple/swift-evolution/blob/main/proposals/0297-concurrency-objc.md).
+  4. The method returns `void`. 
+  5. The completion handler accepts exactly one non-`NSError` value as an argument, optionally in addition to an `NSError` argument.
+  6. The method is annotated with `__attribute__((swift_async(property)))`.
+  
+will be imported as an effectful read-only Swift property, instead of a Swift `async` (and possibly also `throws`) method. Here are some Objective-C method examples from the SDK:
+
+```objc
+// from Safari Services
+@interface SFSafariTab : NSObject
+- (void)getPagesWithCompletionHandler:(void (^)(NSArray<SFSafariPage *> *pages))completionHandler;
+// ...
+@end
+
+// from Exposure Notification
+@interface ENManager : NSObject
+- (void)getUserTraveledWithCompletionHandler:(void (^)(BOOL traveled, NSError *error))completionHandler;
+// ...
+@end
+```
+
+To determine the name of the corresponding Swift property, we apply the "omit needless words" principle (as outlined for the [usual Objective-C bridging](https://github.com/apple/swift/blob/main/docs/CToSwiftNameTranslation-OmitNeedlessWords.md) and [SE-0297](https://github.com/apple/swift-evolution/blob/main/proposals/0297-concurrency-objc.md)). Then, the leading `get` is removed and then the resulting first character of the identifier is lower-cased. Here are the corresponding declarations in Swift if the methods above were annotated with `__attribute__((swift_async(property)))`:
+
+```swift
+class SFSafariTab : NSObject {
+  var pages : [SFSafariPage] {
+    get async { /* ... */ }
+  }
+  // ...
+}
+
+class ENManager : NSObject {
+  var userTraveled : Bool {
+    get async throws { /* ... */ }
+  }
+}
+```
+
+##### Methods with Error Handling
+We also bridge methods that do not have a completion handler, if they meet the
+following requirements:
+
+  1. The name begins with `get`.
+  2. There is no method with the same name, if one were to replace `get` with `set`, in the class or protocol.
+  3. The method takes exactly one argument, an `NSError **` out parameter.
+  4. The method does not return `void`.
+  5. The method is annotated with `__attribute__((swift_error(property)))`.
+
+TODO: examples, ideally from SDK.
+
 
 ## Source compatibility
 
@@ -372,6 +434,7 @@ Defining the interactions between async and/or throwing writable properties and 
 
 is a large project that requires a significant implementation effort. By limiting effectful properties to those that only define a `get` operation, we can avoid all of those complexities. The proposed design for effectful read-only properties is small and straightforward to implement, while still providing a notable benefit to real-world programs and Swift's concurrency efforts.
 
+<!--
 #### Objective-C bridging
 
 There is precedent for automatically synthesizing Swift interfaces to ObjC types. For example, [SE-0297](0297-concurrency-objc.md) describes the generation of `async` functions in Swift by recognizing completion-handler arguments in ObjC signatures. Becca's [original pitch for throwing properties](https://github.com/beccadax/swift-evolution/blob/throwing-properties/proposals/0000-throwing-properties.md) also included discussion of how bridging might work. Effectful read-only properties can similarly be synthesized, and would provide some benefit.  Based on some cursory searching, here is the rough breakdown of how often methods that might be candidates for importing as an effectful computed property appear in the SDK:
@@ -380,6 +443,7 @@ There is precedent for automatically synthesizing Swift interfaces to ObjC types
 * There are a fair number of `async` getters and `async` setters.
 
 Thus, it seems that providing a one-sided ObjC bridging capability, without also bridging effectful setters, would not be ideal and has been excluded from this proposal. But, it is believed that even without ObjC bridging, adding effectful, read-only properties to Swift through this proposal would still be an overall benefit with a high power-to-weight ratio.
+-->
 
 #### KeyPaths
 

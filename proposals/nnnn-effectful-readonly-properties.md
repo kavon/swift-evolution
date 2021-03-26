@@ -21,12 +21,12 @@
 single-paragraph "elevator pitch" so the reader understands what
 problem this proposal is addressing. -->
 
-Nominal types such as classes, structs, and enums in Swift support [computed properties](https://docs.swift.org/swift-book/LanguageGuide/Properties.html), which are members of the type that invoke programmer-specified computations when getting or setting them; instead of being tied to storage like stored properties.  The recently accepted proposal [SE-0296](0296-async-await.md) introduced asynchronous functions via `async`, in conjunction with `await`, but did not specify that computed properties can support effects like asynchrony.  Furthermore, to take full advantage of `async` properties, the ability to specify that a property `throws` is also important.  This document aims to partially fill in this gap by proposing a syntax and semantics for effectful read-only computed properties.
+Nominal types such as classes, structs, and enums in Swift support [computed properties](https://docs.swift.org/swift-book/LanguageGuide/Properties.html), which are members of the type that invoke programmer-specified computations when getting or setting them; instead of being tied to storage like stored properties.  The recently accepted proposal [SE-0296](0296-async-await.md) introduced asynchronous functions via `async`, in conjunction with `await`, but did not specify that computed properties can support effects like asynchrony.  Furthermore, to take full advantage of `async` properties, the ability to specify that a property `throws` is also important.  This document aims to partially fill in this gap by proposing a syntax and semantics for effectful read-only computed properties and subscripts.
 
 <!-- Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/) -->
 
 #### Terminology
-A *read-only computed property* is a computed property that only defines a `get`-ter, which can be `mutating`. Throughout the remainder of this proposal, any unqualified mention of a "property" refers to a read-only computed property.  Furthermore, unless otherwise specified, the concepts of synchrony, asynchrony, and the definition of something being "async" or "sync" are as described in [SE-0296](0296-async-await.md).
+A *read-only computed property* is a computed property that only defines a `get` accessor. Throughout the remainder of this proposal, any unqualified mention of a "property" refers to a read-only computed property.  Furthermore, unless otherwise specified, the concepts of synchrony, asynchrony, and the definition of something being "async" or "sync" are as described in [SE-0296](0296-async-await.md).
 
 An *effect* is an observable behavior of a function. Swift's type system tracks a few kinds of effects: `throws` indicates that the function may return along an exceptional failure path with an `Error`, `rethrows` indicates that a throwing closure passed into the function may be invoked, and `async` indicates that the function may reach a suspension point.
 
@@ -70,7 +70,7 @@ As one might imagine, a type that would like to take advantage of actors to isol
 struct Transaction { /* ... */ }
 enum BankError : Error { /* ... */}
 
-actor class AccountManager {
+actor AccountManager {
   // `lastTransaction` is viewed as async from outside of the actor
   func lastTransaction() -> Transaction { /* ... */ }
 }
@@ -95,7 +95,7 @@ class BankAccount {
 
 While the use of `throw` in the `lastTransactionAmount` getter is rather contrived, realistic uses of `throw` in properties have been [detailed in a prior pitch](https://github.com/beccadax/swift-evolution/blob/throwing-properties/proposals/0000-throwing-properties.md) and detached tasks [can be formulated to throw](https://github.com/DougGregor/swift-evolution/blob/structured-concurrency/proposals/nnnn-structured-concurrency.md#cancellation-1) a `CancellationError`.
 
-Furthermore, without effectful read-only properties, actor classes cannot define *any* computed properties that are accessible from outside of its isolation context as a consequence of their design: a suspension may be performed before entering the actor's isolation context. Thus, we cannot turn `AccountManager`'s `lastTransaction()` method into a computed property without treating it as `async`.
+Furthermore, without effectful read-only properties, actors cannot define *any* computed properties that are accessible from outside of its isolation context as a consequence of their design: a suspension may be performed before entering the actor's isolation context. Thus, we cannot turn `AccountManager`'s `lastTransaction()` method into a computed property without treating it as `async`.
 
 
 #### Existing Code
@@ -172,8 +172,24 @@ extension BankAccount {
 ```
 
 The usual short-hands for do-try-catch, `try!` and `try?`, work as usual.
+The same capability will naturally extend to read-only subscripts:
 
-Computed properties that can be modified, such as via a `set`-ter, will not be allowed to use effects specifiers on their `get`-ter, regardless of whether the setter would require any effects specifiers.  The main purpose of imposing such a restriction is to limit the scope of this proposal to a simple, useful, and easy-to-understand feature. Limiting effects specifiers to read-only properties in this proposal does _not_ prevent future proposals from offering them for all computed properties. For more discussion of why effectful setters are tricky, see the "Extensions considered" section of this proposal.
+```swift
+class Rope {
+  private var numKnots : Int
+  subscript[_ i : Int] -> Knot {
+    get throws {
+      guard i < numKnots else {
+        throw .OutOfBoundsError
+      }
+      return // ...
+    }
+  }
+  // ...
+}
+```
+
+Computed properties or subscripts that can be modified, such as via a `set`-ter, will not be allowed to use effects specifiers on their `get`-ter, regardless of whether the setter would require any effects specifiers.  The main purpose of imposing such a restriction is to limit the scope of this proposal to a simple, useful, and easy-to-understand feature. Limiting effects specifiers to read-only properties in this proposal does _not_ prevent future proposals from offering them for all computed properties. For more discussion of why effectful setters are tricky, see the "Extensions considered" section of this proposal.
 
 ## Detailed design
 
@@ -261,8 +277,8 @@ TODO: works the same as before, I think.
 -->
 
 #### Actors
-
-The [actor model](https://forums.swift.org/t/concurrency-actors-actor-isolation/41613) has been proposed as part of the [Swift concurrency roadmap](https://forums.swift.org/t/swift-concurrency-roadmap/41611), and as of writing the actor portion of the roadmap is still in the pitch stage. Nevertheless, the current design of actor classes will isolate all properties to contexts that are part of that actor's domain, e.g., anything accessable from the actor's `self`. Thus, the following code would be invalid:
+<!-- TODO: this needs updating: we have implicitly async properties as part of actors proposal. -->
+The [actor model](https://forums.swift.org/t/concurrency-actors-actor-isolation/41613) has been proposed as part of the [Swift concurrency roadmap](https://forums.swift.org/t/swift-concurrency-roadmap/41611), and as of writing the actor portion of the roadmap is still in the pitch stage. Nevertheless, the current design of actors will isolate all properties to contexts that are part of that actor's domain, e.g., anything accessable from the actor's `self`. Thus, the following code would be invalid:
 
 ```swift
 actor class MyActor {
@@ -352,7 +368,7 @@ Defining the interactions between async and/or throwing writable properties and 
 2. `_modify`
 3. property observers, i.e., `didSet`, `willSet`
 4. property wrappers
-5. subscripts
+5. writable subscripts
 
 is a large project that requires a significant implementation effort. By limiting effectful properties to those that only define a `get` operation, we can avoid all of those complexities. The proposed design for effectful read-only properties is small and straightforward to implement, while still providing a notable benefit to real-world programs and Swift's concurrency efforts.
 

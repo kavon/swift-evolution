@@ -20,13 +20,11 @@
 Actors are a relatively new nominal type in Swift that provides data-race safety for its mutable state.
 The protection is achieved by _isolating_ the mutable state of each actor instance to at most one task at a time.
 The proposal that introduced actors ([SE-0306](https://github.com/apple/swift-evolution/blob/main/proposals/0306-actors.md)) is quite large and detailed, but misses some of the subtle aspects of creating and destroying an actor's isolated state.
-This proposal aims to shore up the definition of an actor, to clarify when the isolation of the data begins and ends for an actor instance, along with what can be written inside of an actor's `init` and `deinit` declarations.
+This proposal aims to shore up the definition of an actor, to clarify when the isolation of the data begins and ends for an actor instance, along with what can be done inside the body of an actor's `init` and `deinit` declarations.
 
-## Motivation
+## Background
 
-While there is no existing specification for how actor initialization should work, that in itself is not the only motivation for this proposal.
-The de facto expected behavior, as induced by the existing implementation, admits data races due to ambiguous isolation semantics.
-Before discussing this problem, it is important to review the behaviors of initializer and deinitializer declarations in Swift.
+Before diving into this proposal, it is important to review the behaviors of initializer and deinitializer declarations in Swift.
 
 As with classes, actors support both synchronous and asynchronous initializers, along with a user-provided deinitializer, like so:
 
@@ -39,29 +37,38 @@ actor Database {
 }
 ```
 
-An actor's initializer respects the same fundamental rules surrounding the use of `self` as other nominal types: until `self`'s stored properties have all been initialized to a value, `self` is not a fully-formed instance.
-To prevent uses of ill-formed intances, the compiler prevents `self` from escaping the initializer until its stored properties are initialized:
+An actor's initializer respects the same fundamental rules surrounding the use of `self` as other nominal types: until `self`'s stored properties have all been initialized to a value, `self` is not a fully-initialized instance.
+This concept of values being *fully-initialized* before use is a fundamental invariant in Swift.
+To prevent uses of ill-formed, incomplete intances of `self`, the compiler restricts `self` from escaping the initializer until all of its stored properties are initialized:
 
 ```swift
 actor Database {
   var rows: [String]
 
+  func addDefaultData(_ data: String) { /* ... */ }
   func addEmptyRow() { rows.append(String()) }
 
   init(with data: String?) {
     if let data = data {
-      self.rows = [data]
+      self.rows = []
+      // -- self fully initialized here --
+      addDefaultData(data) // OK
     }
     addEmptyRow() // error: 'self' used in method call 'addEmptyRow' before all stored properties are initialized
   }
 }
 ```
 
-In this example, `self` escapes the initializer through the call to its method `addEmptyRow` (all methods take `self` as an implicit argument). But this call is an error, because it happens before `self.rows` is initialized _on all paths_ from the start of the initializer. Namely, if `data` is `nil`, then `self.rows` will not be initialized prior to its use. This flow-sensitive analysis is performed by the compiler, effectively creating multiple points where `self` may be considered fully-initialized:
+In this example, `self` escapes the initializer through the call to its method `addEmptyRow` (all methods take `self` as an implicit argument). But this call is flagged as an error, because it happens before `self.rows` is initialized _on all paths_ to that statement from the start of the initializer's body. Namely, if `data` is `nil`, then `self.rows` will not be initialized prior to it escaping from the initializer.
+Stored properties with default values can be viewed as being initialized immediately after entering the `init`, but prior to executing any of the `init`'s statements.
 
-```
-  init(with)
-```
+Determining whether `self` is fully-initialized is a flow-sensitive analysis performed by the compiler. Because it's flow-sensitive, there are multiple points where `self` becomes fully-initialized. In the example above, there is only one point, after the rows are assigned to `[]`. Thus, it is permitted to call `addDefaultData` right after that point within the same block, because all paths leading to that statement are guaranteed to have assigned `self.rows` ahead-of-time.
+ 
+
+## Motivation
+
+While there is no existing specification for how actor initialization *should* work, that in itself is not the only motivation for this proposal.
+The de facto expected behavior, as induced by the existing implementation, admits data races due to ambiguous isolation semantics.
 
 
 <!-- editing stopped here -->

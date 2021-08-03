@@ -130,6 +130,7 @@ then which executor should be used? It is both valid and desirable to be able to
 The existing implementation makes it impossible to write a correct `init` for the example above, because 
 the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's not possible to initialize `self.status` _at all_. It's not possible to `await` and hop to `self`'s executor to perform an assignment to `self.status`, because `self` is not even a valid actor-instance yet!
 
+<!-- TODO: motivate discussing `deinit` too! -->
 
 ## Proposed solution
 
@@ -148,7 +149,7 @@ reasonably implement the feature.
 
 ## Source compatibility
 
-Relative to the Swift 3 evolution process, the source compatibility
+<!-- Relative to the Swift 3 evolution process, the source compatibility
 requirements for Swift 4 are *much* more stringent: we should only
 break source compatibility if the Swift 3 constructs were actively
 harmful in some way, the volume of affected Swift 3 code is relatively
@@ -162,11 +163,16 @@ it possible for the Swift 4 compiler to accept the old syntax in its
 Swift 3 compatibility mode? Is it possible to automatically migrate
 from the old syntax to the new syntax? Can Swift applications be
 written in a common subset that works both with Swift 3 and Swift 4 to
-aid in migration?
+aid in migration? -->
+
+## Alternatives considered
+
+Describe alternative approaches to addressing the same problem, and
+why you chose this approach instead.
 
 ## Effect on ABI stability
 
-Does the proposal change the ABI of existing language features? The
+<!-- Does the proposal change the ABI of existing language features? The
 ABI comprises all aspects of the code generation model and interaction
 with the Swift runtime, including such things as calling conventions,
 the layout of data types, and the behavior of dynamic features in the
@@ -183,27 +189,22 @@ such as [where clauses for associated
 types](https://github.com/apple/swift-evolution/blob/master/proposals/0142-associated-types-constraints.md),
 can be in scope. If this proposal could be used to improve the
 standard library in ways that would affect its ABI, describe them
-here.
+here. -->
 
 ## Effect on API resilience
 
-API resilience describes the changes one can make to a public API
+<!-- API resilience describes the changes one can make to a public API
 without breaking its ABI. Does this proposal introduce features that
 would become part of a public API? If so, what kinds of changes can be
 made without breaking ABI? Can this feature be added/removed without
 breaking ABI? For more information about the resilience model, see the
 [library evolution
 document](https://github.com/apple/swift/blob/master/docs/LibraryEvolution.rst)
-in the Swift repository.
-
-## Alternatives considered
-
-Describe alternative approaches to addressing the same problem, and
-why you chose this approach instead.
+in the Swift repository. -->
 
 ## Acknowledgments
 
-If significant changes or improvements suggested by members of the 
+<!-- If significant changes or improvements suggested by members of the 
 community were incorporated into the proposal as it developed, take a
 moment here to thank them for their contributions. Swift evolution is a 
-collaborative process, and everyone's input should receive recognition!
+collaborative process, and everyone's input should receive recognition! -->

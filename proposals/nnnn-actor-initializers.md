@@ -132,6 +132,8 @@ the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's
 
 <!-- TODO: motivate discussing `deinit` too! -->
 
+<!-- TODO: motivate a decision on how actors should support constructor delegation. It's a reference type without inheritance, so should `convenience` still be required, in case inheritance is added later on? -->
+
 ## Proposed solution
 
 Describe your solution to the problem. Provide examples and describe

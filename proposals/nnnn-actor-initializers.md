@@ -51,7 +51,7 @@ actor Database {
   init(with data: String?) {
     if let data = data {
       self.rows = []
-      // -- self fully initialized here --
+      // -- self fully-initialized here --
       addDefaultData(data) // OK
     }
     addEmptyRow() // error: 'self' used in method call 'addEmptyRow' before all stored properties are initialized
@@ -62,7 +62,7 @@ actor Database {
 In this example, `self` escapes the initializer through the call to its method `addEmptyRow` (all methods take `self` as an implicit argument). But this call is flagged as an error, because it happens before `self.rows` is initialized _on all paths_ to that statement from the start of the initializer's body. Namely, if `data` is `nil`, then `self.rows` will not be initialized prior to it escaping from the initializer.
 Stored properties with default values can be viewed as being initialized immediately after entering the `init`, but prior to executing any of the `init`'s statements.
 
-Determining whether `self` is fully-initialized is a flow-sensitive analysis performed by the compiler. Because it's flow-sensitive, there are multiple points where `self` becomes fully-initialized. In the example above, there is only one point, after the rows are assigned to `[]`. Thus, it is permitted to call `addDefaultData` right after that point within the same block, because all paths leading to that statement are guaranteed to have assigned `self.rows` ahead-of-time.
+Determining whether `self` is fully-initialized is a flow-sensitive analysis performed by the compiler. Because it's flow-sensitive, there are multiple points where `self` becomes fully-initialized, and these points are not explicitly marked in the source program. In the example above, there is only one such point, immediately after the rows are assigned to `[]`. Thus, it is permitted to call `addDefaultData` right after that assignment statement within the same block, because all paths leading to the call are guaranteed to have assigned `self.rows` beforehand.
  
 
 ## Motivation
@@ -70,9 +70,66 @@ Determining whether `self` is fully-initialized is a flow-sensitive analysis per
 While there is no existing specification for how actor initialization *should* work, that in itself is not the only motivation for this proposal.
 The de facto expected behavior, as induced by the existing implementation, admits data races due to ambiguous isolation semantics.
 
+Unlike other synchronous methods of an actor, a synchronous (or "ordinary") `init` is special in that it is treated as being `nonisolated` from the outside, meaning that there is no `await` (or actor hop) required to call the `init`. But, an `init`'s purpose is to bootstrap an actor-instance called `self`. Thus, at various points within the `init`'s body, `self` is considered a fully-fledged actor instance whose members must be protected by isolation. The existing implementation of actor initializers does not perform this enforcement, leading to data races with the code appearing in the `init`:
 
-<!-- editing stopped here -->
---------------------------------
+```swift
+actor StatsTracker {
+  var counter: Int
+
+  init(_ start: Int) {
+    self.counter = start
+    // -- self fully-initialized here --
+    Task.detached { await self.tick() }
+    
+    // ... do some other work ...
+    
+    if self.counter != start { // 💥 race
+      fatalError("state changed by another thread!")
+    }
+  }
+
+  func tick() {
+    self.counter = self.counter + 1
+  }
+}
+```
+
+This example exhibits a race because `self`, once fully-initialized, is ready to provide isolated access to its members, i.e., it does not start off in a reserved state. Isolated access is obtained by "hopping" to the executor corresponding to `self`. But, because `init` is synchronous, a hop to `self` cannot be performed. Thus, while this `init` is nessecarily treated as `nonisolated` from the outside, once `self` is initialized, the remainder of the `init` is subject to data races.
+
+If the `init` in the previous example only changed to be `async`, this data race does still does not go away. The existing implementation does not perform a hop to `self` in such initializers, even though it now could. This is not just a bug that has a straightforward fix, because if an asynchronous actor `init` were isolated to the `@MainActor`: 
+
+```swift
+class ConnectionStatusDelegate {
+  @MainActor
+  func connectionStarting() { /**/ }
+
+  @MainActor
+  func connectionEstablished() { /**/ }
+}
+
+actor ConnectionManager {
+  var status: ConnectionStatusDelegate
+  var connectionCount: Int
+
+  @MainActor
+  init(_ sts: ConnectionStatusDelegate) async {
+    // --- on MainActor --
+    self.status = sts
+    self.status.connectionStarting()
+    self.connectionCount = 0
+    // --- self fully-initialized here ---
+    
+    // ... connect ...
+    self.status.connectionEstablished()
+  }
+}
+```
+
+then which executor should be used? It is both valid and desirable to be able to isolate an actor's `init` to a global actor, such as the `@MainActor`, to ensure that the right executor is used for the operations it performs. We'd also like to perform the initialization while on `@MainActor` so that the `ConnectionStatusDelegate` can be updated without any possibility of suspension (i.e., no `await` needed). 
+
+The existing implementation makes it impossible to write a correct `init` for the example above, because 
+the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's not possible to initialize `self.status` _at all_. It's not possible to `await` and hop to `self`'s executor to perform an assignment to `self.status`, because `self` is not even a valid actor-instance yet!
+
 
 ## Proposed solution
 

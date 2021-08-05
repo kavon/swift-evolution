@@ -5,7 +5,8 @@
 * Review Manager: TBD
 * Status: **Partially implemented in `main`.**
 * Previous Discussions:
-  * [On Actor Initializers](https://forums.swift.org/t/on-actor-initializers/49001) 
+  * [On Actor Initializers](https://forums.swift.org/t/on-actor-initializers/49001)
+  * [Deinit and MainActor](https://forums.swift.org/t/deinit-and-mainactor/50132)
 
 <!-- *During the review process, add the following fields as needed:*
 
@@ -67,8 +68,16 @@ Determining whether `self` is fully-initialized is a flow-sensitive analysis per
 
 ## Motivation
 
-While there is no existing specification for how actor initialization *should* work, that in itself is not the only motivation for this proposal.
-The de facto expected behavior, as induced by the existing implementation, admits data races due to ambiguous isolation semantics.
+While there is no existing specification for how actor initialization and deinitialization *should* work, that in itself is not the only motivation for this proposal.
+The de facto expected behavior, as induced by the existing implementation, is also problematic. In summary, the major problems are:
+
+  1. Initializers can exhibit data races due to ambiguous isolation semantics.
+  2. There is no explicitly provided facility to delegate from one initializer to another.
+  3. Deinitializers are prohibited from touching the actor's isolated state, significantly limiting their functionality.
+
+The following subsections will discuss these three high-level problems in more detail.
+
+### Initializer Races
 
 Unlike other synchronous methods of an actor, a synchronous (or "ordinary") `init` is special in that it is treated as being `nonisolated` from the outside, meaning that there is no `await` (or actor hop) required to call the `init`. But, an `init`'s purpose is to bootstrap an actor-instance called `self`. Thus, at various points within the `init`'s body, `self` is considered a fully-fledged actor instance whose members must be protected by isolation. The existing implementation of actor initializers does not perform this enforcement, leading to data races with the code appearing in the `init`:
 
@@ -130,9 +139,32 @@ then which executor should be used? It is both valid and desirable to be able to
 The existing implementation makes it impossible to write a correct `init` for the example above, because 
 the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's not possible to initialize `self.status` _at all_. It's not possible to `await` and hop to `self`'s executor to perform an assignment to `self.status`, because `self` is not even a valid actor-instance yet!
 
-<!-- TODO: motivate discussing `deinit` too! -->
+### Initializer Delegation
 
-<!-- TODO: motivate a decision on how actors should support constructor delegation. It's a reference type without inheritance, so should `convenience` still be required, in case inheritance is added later on? -->
+All nominal types in Swift, except actors, explicitly support initializer delegation, which is when one initializer calls another one to perform initialization.
+For classes, [delegation rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID216) are more complicated because of inheritance.
+So, there is a required explicit `convenience` modifier to make, for example, a distinction between initializers that *must* delegate and those that do not.
+In contrast, value types do not support inheritance, so [the rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID215) are much simpler: any `init` can delegate, but if it does, then it must delegate or assign to `self` in all cases:
+
+```swift
+struct S {
+  var x: Int
+  init(_ v: Int) { self.x = v }
+  init(b: Bool) {
+    if b {
+      self.init(1)
+    } else {
+      self.x = 0 // error: 'self' used before 'self.init' call or assignment to 'self'
+    }
+  }
+}
+```
+
+What rules should apply to actors, which are a reference type (like a class) but do not support inheritance?
+
+### Deinitializer Isolation
+
+<!-- TODO: motivate discussing `deinit` too! -->
 
 ## Proposed solution
 

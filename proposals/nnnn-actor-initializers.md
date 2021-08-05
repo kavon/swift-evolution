@@ -160,6 +160,7 @@ struct S {
 }
 ```
 
+Currently, actors must define a `convenience` initializer to perform delegation.
 What rules should apply to actors, which are a reference type (like a class) but do not support inheritance?
 
 ### Deinitializer Isolation

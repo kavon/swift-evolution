@@ -21,20 +21,21 @@
 Actors are a relatively new nominal type in Swift that provides data-race safety for its mutable state.
 The protection is achieved by _isolating_ the mutable state of each actor instance to at most one task at a time.
 The proposal that introduced actors ([SE-0306](https://github.com/apple/swift-evolution/blob/main/proposals/0306-actors.md)) is quite large and detailed, but misses some of the subtle aspects of creating and destroying an actor's isolated state.
-This proposal aims to shore up the definition of an actor, to clarify when the isolation of the data begins and ends for an actor instance, along with what can be done inside the body of an actor's `init` and `deinit` declarations.
+This proposal aims to shore up the definition of an actor, to clarify *when* the isolation of the data begins and ends for an actor instance, along with *what* can be done inside the body of an actor's `init` and `deinit` declarations.
 
 ## Background
 
-Before diving into this proposal, it is important to review the behaviors of initializer and deinitializer declarations in Swift.
+To get the most out of this proposal, it is important to review the existing behaviors of initializer and deinitializer declarations in Swift.
 
 As with classes, actors support both synchronous and asynchronous initializers, along with a user-provided deinitializer, like so:
 
 ```swift
 actor Database {
   var rows: [String]
-  init() { /**/ }
-  init(with: [String]) async { /**/ }
-  deinit { /**/ }
+
+  init() { /* ... */ }
+  init(with: [String]) async { /* ... */ }
+  deinit { /* ... */ }
 }
 ```
 
@@ -63,17 +64,17 @@ actor Database {
 In this example, `self` escapes the initializer through the call to its method `addEmptyRow` (all methods take `self` as an implicit argument). But this call is flagged as an error, because it happens before `self.rows` is initialized _on all paths_ to that statement from the start of the initializer's body. Namely, if `data` is `nil`, then `self.rows` will not be initialized prior to it escaping from the initializer.
 Stored properties with default values can be viewed as being initialized immediately after entering the `init`, but prior to executing any of the `init`'s statements.
 
-Determining whether `self` is fully-initialized is a flow-sensitive analysis performed by the compiler. Because it's flow-sensitive, there are multiple points where `self` becomes fully-initialized, and these points are not explicitly marked in the source program. In the example above, there is only one such point, immediately after the rows are assigned to `[]`. Thus, it is permitted to call `addDefaultData` right after that assignment statement within the same block, because all paths leading to the call are guaranteed to have assigned `self.rows` beforehand.
+Determining whether `self` is fully-initialized is a flow-sensitive analysis performed by the compiler. Because it's flow-sensitive, there are multiple points where `self` becomes fully-initialized, and these points are not explicitly marked in the source program. In the example above, there is only one such point, immediately after the rows are assigned to `[]`. Thus, it is permitted to call `addDefaultData` right after that assignment statement within the same block, because all paths leading to the call are guaranteed to have assigned `self.rows` beforehand. Keep in mind that these rules are not unique to actors, as they are enforced in initializers for other types like structs and classes.
  
 
 ## Motivation
 
 While there is no existing specification for how actor initialization and deinitialization *should* work, that in itself is not the only motivation for this proposal.
-The de facto expected behavior, as induced by the existing implementation, is also problematic. In summary, the major problems are:
+The *de facto* expected behavior, as induced by the existing implementation, is also problematic. In summary, the major problems are:
 
   1. Initializers can exhibit data races due to ambiguous isolation semantics.
   2. There is no explicitly provided facility to delegate from one initializer to another.
-  3. Deinitializers are prohibited from touching the actor's isolated state, significantly limiting their functionality.
+  3. Deinitializers need additional restrictions to properly support custom executors.
 
 The following subsections will discuss these three high-level problems in more detail.
 

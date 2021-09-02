@@ -167,6 +167,23 @@ What rules should apply to actors, which are a reference type (like a class) but
 
 <!-- TODO: motivate discussing `deinit` too! -->
 
+```swift
+actor A {
+  var x: Int = 0
+  var y: SomeClass
+
+  func increment() { x += 1 }
+
+  deinit {
+    increment() // should be rejected. for custom executors that serialize execution among multiple actors, 
+                // this could allow two actor methods to run simultaenously
+
+    x += 1 // is OK since it's stored property.
+    y.method() // is OK.
+  }
+}
+```
+
 ## Proposed solution
 
 Describe your solution to the problem. Provide examples and describe

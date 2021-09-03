@@ -73,14 +73,14 @@ While there is no existing specification for how actor initialization and deinit
 The *de facto* expected behavior, as induced by the existing implementation, is also problematic. In summary, the major problems are:
 
   1. Initializers can exhibit data races due to ambiguous isolation semantics.
-  2. There is no explicitly provided facility to delegate from one initializer to another.
-  3. Deinitializers need additional restrictions to properly support custom executors.
+  2. Initializer delegation requires the use of a `convenience` keyword, which does not have meaning without inheritance.
+  3. Deinitializers are run without obtaining access to the actor's executor, yet they are permitted to invoke any actor-isolated method.
 
 The following subsections will discuss these three high-level problems in more detail.
 
 ### Initializer Races
 
-Unlike other synchronous methods of an actor, a synchronous (or "ordinary") `init` is special in that it is treated as being `nonisolated` from the outside, meaning that there is no `await` (or actor hop) required to call the `init`. But, an `init`'s purpose is to bootstrap an actor-instance called `self`. Thus, at various points within the `init`'s body, `self` is considered a fully-fledged actor instance whose members must be protected by isolation. The existing implementation of actor initializers does not perform this enforcement, leading to data races with the code appearing in the `init`:
+Unlike other synchronous methods of an actor, a synchronous (or "ordinary") `init` is special in that it is treated as being `nonisolated` from the outside, meaning that there is no `await` (or actor hop) required to call the `init`. This is because an `init`'s purpose is to bootstrap a fresh actor-instance, called `self`. Thus, at various points within the `init`'s body, `self` is considered a fully-fledged actor instance whose members must be protected by isolation. The existing implementation of actor initializers does not perform this enforcement, leading to data races with the code appearing in the `init`:
 
 ```swift
 actor StatsTracker {
@@ -104,9 +104,9 @@ actor StatsTracker {
 }
 ```
 
-This example exhibits a race because `self`, once fully-initialized, is ready to provide isolated access to its members, i.e., it does not start off in a reserved state. Isolated access is obtained by "hopping" to the executor corresponding to `self`. But, because `init` is synchronous, a hop to `self` cannot be performed. Thus, while this `init` is nessecarily treated as `nonisolated` from the outside, once `self` is initialized, the remainder of the `init` is subject to data races.
+This example exhibits a race because `self`, once fully-initialized, is ready to provide isolated access to its members, i.e., it does *not* start in a reserved state. Isolated access is obtained by "hopping" to the executor corresponding to `self` from an asynchronous function. But, because `init` is synchronous, a hop to `self` fundamentally cannot be performed. Thus, once `self` is initialized, the remainder of the `init` is subject to the kind of data race that actors are meant to eliminate.
 
-If the `init` in the previous example only changed to be `async`, this data race does still does not go away. The existing implementation does not perform a hop to `self` in such initializers, even though it now could. This is not just a bug that has a straightforward fix, because if an asynchronous actor `init` were isolated to the `@MainActor`: 
+If the `init` in the previous example were only changed to be `async`, this data race still does not go away. The existing implementation does not perform a hop to `self` in such initializers, even though it now could to prevent races. This is not just a bug that has a straightforward fix, because if an asynchronous actor `init` were isolated to the `@MainActor`: 
 
 ```swift
 class ConnectionStatusDelegate {
@@ -135,17 +135,17 @@ actor ConnectionManager {
 }
 ```
 
-then which executor should be used? It is both valid and desirable to be able to isolate an actor's `init` to a global actor, such as the `@MainActor`, to ensure that the right executor is used for the operations it performs. We'd also like to perform the initialization while on `@MainActor` so that the `ConnectionStatusDelegate` can be updated without any possibility of suspension (i.e., no `await` needed). 
+then which executor should be used? Should it be valid to isolate an actor's `init` to a global actor, such as the `@MainActor`, to ensure that the right executor is used for the operations it performs? The example above serves as a possible use case for that capability: being able to perform the initialization while on `@MainActor` so that the `ConnectionStatusDelegate` can be updated without any possibility of suspension (i.e., no `await` needed). 
 
 The existing implementation makes it impossible to write a correct `init` for the example above, because 
-the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's not possible to initialize `self.status` _at all_. It's not possible to `await` and hop to `self`'s executor to perform an assignment to `self.status`, because `self` is not even a valid actor-instance yet!
+the `init` is considered to be entirely isolated to the `@MainActor`. Thus, it's not possible to initialize `self.status` _at all_. It's not possible to `await` and hop to `self`'s executor to perform an assignment to `self.status`, because `self` is not a fully-initialized actor-instance yet!
 
 ### Initializer Delegation
 
 All nominal types in Swift, except actors, explicitly support initializer delegation, which is when one initializer calls another one to perform initialization.
-For classes, [delegation rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID216) are more complicated because of inheritance.
-So, there is a required explicit `convenience` modifier to make, for example, a distinction between initializers that *must* delegate and those that do not.
-In contrast, value types do not support inheritance, so [the rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID215) are much simpler: any `init` can delegate, but if it does, then it must delegate or assign to `self` in all cases:
+For classes, initializer [delegation rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID216) are complex due to the presence of inheritance.
+So, classes have a required and explicit `convenience` modifier to make, for example, a distinction between initializers that *must* delegate and those that do not.
+In contrast, value types do *not* support inheritance, so [the rules](https://docs.swift.org/swift-book/LanguageGuide/Initialization.html#ID215) are much simpler: any `init` can delegate, but if it does, then it must delegate or assign to `self` in all cases:
 
 ```swift
 struct S {
@@ -161,29 +161,48 @@ struct S {
 }
 ```
 
-Currently, actors must define a `convenience` initializer to perform delegation.
-What rules should apply to actors, which are a reference type (like a class) but do not support inheritance?
+Actors, which are reference types (like a classes), do not support inheritance. But, currently they must use the `convenience` modifier on an initializer to perform any delegation. That modifier appears to serve little use for actors, so is it still needed?
+
+<!-- look into NSObject-inheriting actors and other funky stuff -->
 
 ### Deinitializer Isolation
 
-<!-- TODO: motivate discussing `deinit` too! -->
+A user-defined `deinit` plays an important role in programming idioms such as [RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization). In Swift, only reference types support such a `deinit` and it is automatically called whenever the last reference to the object is destroyed, which can happen virtually anywhere. The implicit contract of a `deinit` is that, at the beginning of the `deinit`, no other references to `self` exist. In addition, after `deinit` has finished executing, any copies of `self` created during the `deinit` are not valid.
+
+The single-reference nature of `self` in a `deinit` means that, in the usual case, we do not need to `await` or synchronize with an actor's executor in order to access its isolated state. The only exception to this is when the executor is not exclusively owned by the actor. Custom executors have been pitched for Swift concurrency, enabling the sharing of executors among actor-instances:
 
 ```swift
 actor A {
-  var x: Int = 0
-  var y: SomeClass
+  let friend = B()
 
-  func increment() { x += 1 }
+  nonisolated public final 
+    var serialExecutor: UnownedExecutorRef {
+      return friend.serialExecutor
+  }
+
+  func f() {
+    print("A: access begin!")
+    b.f() // ????
+    print("A: access end!")
+  }
 
   deinit {
-    increment() // should be rejected. for custom executors that serialize execution among multiple actors, 
-                // this could allow two actor methods to run simultaenously
+    f()
+  }
+}
 
-    x += 1 // is OK since it's stored property.
-    y.method() // is OK.
+actor B { 
+  func f() {
+    print("B: access begin!")
+
+    print("B: access end!")
   }
 }
 ```
+
+In the example above, every instance of `A` has an associated instance of `B`, and exclusive-access to `A`'s isolated state requires...
+
+<!-- talk to John about this. -->
 
 ## Proposed solution
 
@@ -222,6 +241,12 @@ aid in migration? -->
 
 Describe alternative approaches to addressing the same problem, and
 why you chose this approach instead.
+
+### Deinitializers
+
+One workaround for the lack of ability to synchronize with an actor's executor prior to destruction is to implicitly wrap the body of the `deinit` in a task. 
+
+TODO: explain why this wouldn't work.
 
 ## Effect on ABI stability
 

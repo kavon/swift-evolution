@@ -163,17 +163,23 @@ struct S {
 
 Actors, which are reference types (like a classes), do not support inheritance. But, currently they must use the `convenience` modifier on an initializer to perform any delegation. That modifier appears to serve little use for actors, so is it still needed?
 
-<!-- look into NSObject-inheriting actors and other funky stuff -->
+<!-- TODO: look into NSObject-inheriting actors and other funky stuff -->
 
 ### Deinitializer Isolation
 
+<!-- TODO: this is a pretty weak "problem", since it's entirely dependent
+on how custom executors are structured. The main problem is that if there
+is another reference to an actor's executor, which is a serial executor, then it's not correct to allow its methods & computed properties to be called from its deinit. -->
+
 A user-defined `deinit` plays an important role in programming idioms such as [RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization). In Swift, only reference types support such a `deinit` and it is automatically called whenever the last reference to the object is destroyed, which can happen virtually anywhere. The implicit contract of a `deinit` is that, at the beginning of the `deinit`, no other references to `self` exist. In addition, after `deinit` has finished executing, any copies of `self` created during the `deinit` are not valid.
 
-The single-reference nature of `self` in a `deinit` means that, in the usual case, we do not need to `await` or synchronize with an actor's executor in order to access its isolated state. The only exception to this is when the executor is not exclusively owned by the actor. Custom executors have been pitched for Swift concurrency, enabling the sharing of executors among actor-instances:
+The single-reference nature of `self` in a `deinit` means that, in theory, we should not need to `await` or synchronize with an actor's executor in order to access its isolated state. This is because any task that is still awaiting access to an instance must also hold a reference to it. Thus, when there are no references to the instance left, then the executor should also be idle.
+
+The only exception to this is when the executor is *not* exclusively owned by the actor. In the pitch for custom executors, the serial executor of an actor can be exposed and shared with other actors. In particular, this creates the possibility of an actor instance that is being dealloated, but its executor is busy servicing jobs for another instance:
 
 ```swift
 actor A {
-  let friend = B()
+  let friend: B
 
   nonisolated public final 
     var serialExecutor: UnownedExecutorRef {
@@ -182,7 +188,7 @@ actor A {
 
   func f() {
     print("A: access begin!")
-    b.f() // ????
+    // ...
     print("A: access end!")
   }
 
@@ -194,53 +200,73 @@ actor A {
 actor B { 
   func f() {
     print("B: access begin!")
-
+    // ...
     print("B: access end!")
   }
 }
 ```
 
-In the example above, every instance of `A` has an associated instance of `B`, and exclusive-access to `A`'s isolated state requires...
+In the example above, every instance of `A` has an associated `friend` of type `B`, whose serial executor is used by the `A` instance.
+There may be references to `friend` that outlive an instance of `A`.
+Thus, when entering `A`'s `deinit`, the executor `friend.serialExecutor` has not been synchronized with, and may be actively running other jobs.
+This presents a problem: the serial executor's invariant is that only one job is ever active at a time. Yet, if `A`'s `deinit` calls `self.f(_:)`, we may observe an illegal event ordering such as:
 
-<!-- talk to John about this. -->
+```
+B: access begin!
+A: access begin!
+```
+
+which breaks the invariant of serial execution.
 
 ## Proposed solution
 
-Describe your solution to the problem. Provide examples and describe
-how they work. Show how your solution is better than current
-workarounds: is it cleaner, safer, or more efficient?
+The previous sections described problems with the current state of actor initialization and deinitialization:
 
+  1. Initializers can exhibit data races due to ambiguous isolation semantics.
+  2. Initializer delegation requires the use of a `convenience` keyword, which does not have meaning without inheritance.
+  3. Deinitializers are run without obtaining access to the actor's executor, yet they are permitted to invoke any actor-isolated method.
+
+The remainder of this section details the proposed solution to those problems.
+
+**Problem 1: Initializer Data Races**
+
+<!-- TODO: Refresh your memory on what was decided here and expand more. -->
+
+Synchronous initializers reject all escaping uses of `self` throughout the initializer. This means that `self` can only be used to access stored properties, because invoking a computed property or method passes `self` implicitly. In addition, this means `self` cannot be captured in a closure, which prevents the main data race example from the Motivation section.
+
+An asynchronous initializer performs an actor-hop to `self` immediately after `self` becomes fully-initialized, on all paths.
+
+<!-- TODO: What about global actor isolation? -->
+
+
+**Problem 2: Initializer Delegation**
+
+Actors will no-longer require the `convenience` modifier on an initializer.
+<!-- TODO: describe the isolation changes made to delegating initializers. -->
+
+**Problem 3: Deinitializers and Executors**
+
+<!-- TODO: this depends on whether we'll be able to statically determine whether an actor's executor is customized or not. If so, then we can just say that the method/computed property restriction only applies to such actors. -->
+
+<!-- TODO: is this needed? --> 
 ## Detailed design
 
-Describe the design of the solution in detail. If it involves new
-syntax in the language, show the additions and changes to the Swift
-grammar. If it's a new API, show the full API and its documentation
-comments detailing what it does. The detail in this section should be
-sufficient for someone who is *not* one of the authors to be able to
-reasonably implement the feature.
+<!-- TODO: explain briefly where it is implemented. -->
+
+<!-- TODO: What about failable and throwing initializers? -->
+
 
 ## Source compatibility
 
-<!-- Relative to the Swift 3 evolution process, the source compatibility
-requirements for Swift 4 are *much* more stringent: we should only
-break source compatibility if the Swift 3 constructs were actively
-harmful in some way, the volume of affected Swift 3 code is relatively
-small, and we can provide source compatibility (in Swift 3
-compatibility mode) and migration.
+There is no simple way to automatically migrate applications that use `self` in actor initializers in the ways that are considered to be errors by this proposal.
+At its core, the simplest migration path is to mark the initializer `async`, but that would introduce `async` requirements on callers.
 
-Will existing correct Swift 3 or Swift 4 applications stop compiling
-due to this change? Will applications still compile but produce
-different behavior than they used to? If "yes" to either of these, is
-it possible for the Swift 4 compiler to accept the old syntax in its
-Swift 3 compatibility mode? Is it possible to automatically migrate
-from the old syntax to the new syntax? Can Swift applications be
-written in a common subset that works both with Swift 3 and Swift 4 to
-aid in migration? -->
+<!-- TODO: The problem: delegating inits make `self` nonisolated, so the code that plays with `self` would need to move to one of those initializers. But then, you would need to make that delegating initializer `async`, which fundamentally changes the type signature. -->
 
 ## Alternatives considered
 
-Describe alternative approaches to addressing the same problem, and
-why you chose this approach instead.
+<!-- Describe alternative approaches to addressing the same problem, and
+why you chose this approach instead. -->
 
 ### Deinitializers
 

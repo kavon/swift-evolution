@@ -190,8 +190,8 @@ class Process {
                   // async call would be required.
 
   deinit {
-    // Problem: how do we release the resources contained
-    // in our global-actor isolated stored properties from 
+    // Problem: how do we invoke clean-up methods on
+    // our global-actor isolated stored properties from 
     // a deinit, which can never be actor-isolated?
   }
 }
@@ -200,7 +200,7 @@ class Process {
 In the example above, because `status` and `pid` are isolated to two different global-actors, there's no single actor-isolation that can be specified for the synchronous `init`.
 In fact, all non-delegating initializers would need to have the same isolation as all stored properties.
 For the asynchronous `init`, the fact that a suspension may occur is not explicit in the program, because no `await` is needed on the right-hand side expression of the property declaration's assignment.
-Finally, even if the isolation of the initializers and stored properties matched, the deinit still can _never_ access the stored properties in order to invoke clean-ups routines, without using unsafe lifetime extensions of the actor from the `deinit`.
+Finally, even if the isolation of the initializers and stored properties matched, the deinit still _cannot_ access the stored properties in order to, for example, perform nessecary clean-up actions, without using unsafe lifetime extensions of the class instance from the `deinit`.
 
 ### Initializer Delegation
 
